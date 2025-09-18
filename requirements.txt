@@ -1,0 +1,7 @@
+gradio==4.36.1
+selenium
+pandas
+requests
+beautifulsoup4
+pillow
+imagehash
