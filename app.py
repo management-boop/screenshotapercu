@@ -1,8 +1,3 @@
-# Install dependencies
-!pip install gradio selenium pandas requests
-!apt-get update
-!apt-get install -y chromium-chromedriver
-
 import io
 import base64
 from typing import List
@@ -15,7 +10,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 import time
-import os
+import requests
 
 # -------- Utilities --------
 def capture_screenshot(url: str, timeout=30) -> str:
@@ -27,54 +22,24 @@ def capture_screenshot(url: str, timeout=30) -> str:
         chrome_options.add_argument("--disable-dev-shm-usage")
         driver = webdriver.Chrome(options=chrome_options)
         
-        driver.set_window_size(1280, 720)  # Set window size for consistent thumbnails
+        driver.set_window_size(1280, 720)
         driver.get(url)
         
-        # Wait for page to load and pop-ups to appear
-        time.sleep(10)  # Increased initial wait for slow-loading pages
+        time.sleep(7)
         
-        # Handle age verification or cookie consent pop-ups
         try:
-            # Switch to iframe if pop-up is in one
-            driver.switch_to.default_content()
-            iframes = driver.find_elements(By.TAG_NAME, "iframe")
-            for iframe in iframes:
-                driver.switch_to.frame(iframe)
-                try:
-                    WebDriverWait(driver, 15).until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]"))
-                    ).click()
-                    print(f"Clicked 'continue' in iframe for {url}")
-                    break
-                except:
-                    driver.switch_to.default_content()
-            else:
-                # Try main content
-                element = WebDriverWait(driver, 15).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'proceed') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'i am 19') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept')]"))
-                )
-                ActionChains(driver).move_to_element(element).click(element).perform()
-                print(f"Clicked pop-up button for {url}")
+            element = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'proceed') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'i am 19') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept')]"))
+            )
+            ActionChains(driver).move_to_element(element).click(element).perform()
         except Exception as e:
             print(f"No clickable pop-up button found for {url}: {str(e)}")
-            # Scroll and retry
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(3)
-            try:
-                element = driver.find_element(By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]")
-                ActionChains(driver).move_to_element(element).click(element).perform()
-                print(f"Clicked 'continue' after scroll for {url}")
-            except Exception as e:
-                print(f"Retry failed: {str(e)}")
-
-        # Additional wait after interaction
-        time.sleep(3)
         
-        # Capture screenshot
+        time.sleep(3)
         screenshot = driver.get_screenshot_as_png()
         driver.quit()
-        
-        # Convert to data URI
         return "data:image/png;base64," + base64.b64encode(screenshot).decode()
     except Exception as e:
         print(f"Error capturing screenshot for {url}: {str(e)}")
@@ -82,7 +47,6 @@ def capture_screenshot(url: str, timeout=30) -> str:
         return None
 
 def parse_urls(text: str) -> List[str]:
-    """Parse and deduplicate URLs from text input."""
     out = []
     for line in (text or "").splitlines():
         line = line.strip()
@@ -93,28 +57,18 @@ def parse_urls(text: str) -> List[str]:
 
 # -------- Main Function --------
 def extract_screenshots(url_text: str, csv_file, max_urls: int):
-    """Process auction URLs: capture screenshots and display thumbnails next to URLs."""
-    # Collect URLs
     urls = parse_urls(url_text)
     if csv_file is not None:
-        try:
-            # Treat csv_file as a path and open it
-            with open(csv_file, 'r') as f:
-                df = pd.read_csv(f)
-            url_cols = [c for c in df.columns if "url" in c.lower()] or [df.columns[0]]
-            urls += [str(u) for u in df[url_cols[0]] if str(u).startswith("http")]
-        except Exception as e:
-            print(f"Error reading CSV file: {str(e)}")
-            return f"Error processing CSV: {str(e)}", ""
+        df = pd.read_csv(csv_file)
+        url_cols = [c for c in df.columns if "url" in c.lower()] or [df.columns[0]]
+        urls += [str(u) for u in df[url_cols[0]] if str(u).startswith("http")]
     urls = list(dict.fromkeys(urls))[:max_urls]
     if not urls:
         return "No valid URLs provided.", ""
 
-    # Process URLs and build HTML
     html = ["<div style='display:flex;flex-direction:column;gap:14px'>"]
     for u in urls:
         try:
-            # Capture screenshot
             data_uri = capture_screenshot(u)
             if data_uri is None:
                 html.append(
@@ -147,7 +101,7 @@ def extract_screenshots(url_text: str, csv_file, max_urls: int):
 # -------- Gradio Interface --------
 with gr.Blocks(title="Auction Screenshot Extractor") as demo:
     gr.Markdown("### Auction Screenshot Extractor")
-    gr.Markdown("Paste auction URLs (one per line) or upload a CSV with 'url' column. The tool captures a screenshot of each page and displays it next to the URL. Pop-ups are automated where possible.")
+    gr.Markdown("Paste auction URLs (one per line) or upload a CSV with 'url' column. The tool captures a screenshot of each page and displays it next to the URL.")
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -165,11 +119,5 @@ with gr.Blocks(title="Auction Screenshot Extractor") as demo:
         outputs=[status, right]
     )
 
-# Launch in Colab
-demo.launch(share=True, debug=True)
-
-# Save for local use
-with open('auction_screenshot_extractor.py', 'w') as f:
-    f.write(''.join([line for line in open(__file__, 'r').readlines() if not line.strip().startswith('#')]))  # Save content, skipping comments
-from google.colab import files
-files.download('auction_screenshot_extractor.py')
+if __name__ == "__main__":
+    demo.launch(share=True, debug=True)
