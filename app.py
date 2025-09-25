@@ -11,10 +11,15 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # -------- Utilities --------
 def capture_screenshot(url: str, timeout=30) -> str:
-    """Capture a screenshot of the webpage, handling pop-ups, and return as a base64-encoded data URI."""
+    """
+    Capture a screenshot of the webpage, handling pop-ups.
+    This function is self-contained and thread-safe.
+    """
+    driver = None
     try:
         chrome_options = Options()
         chrome_options.add_argument("--headless")
@@ -25,26 +30,34 @@ def capture_screenshot(url: str, timeout=30) -> str:
         driver.set_window_size(1280, 720)
         driver.get(url)
         
-        time.sleep(7)
+        wait = WebDriverWait(driver, timeout)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         
         try:
-            element = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'proceed') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'i am 19') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'agree') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'accept')]"))
-            )
-            ActionChains(driver).move_to_element(element).click(element).perform()
+            # More robust pop-up handling
+            buttons = driver.find_elements(By.XPATH, "//button")
+            for button in buttons:
+                text = button.text.lower()
+                if any(keyword in text for keyword in ['continue', 'proceed', 'i am 19', 'agree', 'accept']):
+                    try:
+                        button.click()
+                        time.sleep(2) # Wait for action to complete
+                        break # Assume one pop-up is enough
+                    except Exception:
+                        pass # Button might not be clickable
         except Exception as e:
             print(f"No clickable pop-up button found for {url}: {str(e)}")
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
-        
-        time.sleep(3)
+            time.sleep(2)
+
         screenshot = driver.get_screenshot_as_png()
-        driver.quit()
         return "data:image/png;base64," + base64.b64encode(screenshot).decode()
     except Exception as e:
         print(f"Error capturing screenshot for {url}: {str(e)}")
-        driver.quit() if 'driver' in locals() else None
         return None
+    finally:
+        if driver:
+            driver.quit()
 
 def parse_urls(text: str) -> List[str]:
     out = []
@@ -59,43 +72,52 @@ def parse_urls(text: str) -> List[str]:
 def extract_screenshots(url_text: str, csv_file, max_urls: int):
     urls = parse_urls(url_text)
     if csv_file is not None:
-        df = pd.read_csv(csv_file)
-        url_cols = [c for c in df.columns if "url" in c.lower()] or [df.columns[0]]
-        urls += [str(u) for u in df[url_cols[0]] if str(u).startswith("http")]
+        try:
+            df = pd.read_csv(csv_file.name)
+            url_cols = [c for c in df.columns if "url" in c.lower()] or [df.columns[0]]
+            urls.extend([str(u) for u in df[url_cols[0]] if str(u).startswith("http")])
+        except Exception as e:
+            return f"Error reading CSV: {e}", ""
+
     urls = list(dict.fromkeys(urls))[:max_urls]
     if not urls:
         return "No valid URLs provided.", ""
 
-    html = ["<div style='display:flex;flex-direction:column;gap:14px'>"]
-    for u in urls:
-        try:
-            data_uri = capture_screenshot(u)
-            if data_uri is None:
-                html.append(
+    html_results = {url: "" for url in urls}
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_url = {executor.submit(capture_screenshot, url): url for url in urls}
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                data_uri = future.result()
+                if data_uri:
+                    html_results[url] = (
+                        f"<div style='display:flex;align-items:center;gap:16px'>"
+                        f"<img src='{data_uri}' style='width:180px;border:1px solid #ddd;border-radius:8px'/>"
+                        f"<a href='{url}' target='_blank' style='font-size:12px;word-break:break-all'>{url}</a>"
+                        f"</div>"
+                    )
+                else:
+                    html_results[url] = (
+                        f"<div style='display:flex;align-items:center;gap:16px'>"
+                        f"<div style='width:180px;height:120px;display:flex;align-items:center;justify-content:center;border:1px solid #ddd;border-radius:8px;background:#f6f6f6'>NO IMAGE</div>"
+                        f"<a href='{url}' target='_blank' style='font-size:12px;word-break:break-all'>{url}</a>"
+                        f"</div>"
+                    )
+            except Exception as e:
+                print(f"Error processing {url}: {str(e)}")
+                html_results[url] = (
                     f"<div style='display:flex;align-items:center;gap:16px'>"
-                    f"<div style='width:180px;height:120px;display:flex;align-items:center;justify-content:center;border:1px solid #ddd;border-radius:8px;background:#f6f6f6'>NO IMAGE</div>"
-                    f"<a href='{u}' target='_blank' style='font-size:12px;word-break:break-all'>{u}</a>"
+                    f"<div style='width:180px;height:120px;display:flex;align-items:center;justify-content:center;border:1px solid #ddd;border-radius:8px;background:#f6f6f6'>ERROR</div>"
+                    f"<a href='{url}' target='_blank' style='font-size:12px;word-break:break-all'>{url}</a>"
                     f"</div>"
                 )
-                continue
 
-            html.append(
-                f"<div style='display:flex;align-items:center;gap:16px'>"
-                f"<img src='{data_uri}' style='width:180px;border:1px solid #ddd;border-radius:8px'/>"
-                f"<a href='{u}' target='_blank' style='font-size:12px;word-break:break-all'>{u}</a>"
-                f"</div>"
-            )
-        except Exception as e:
-            print(f"Error processing {u}: {str(e)}")
-            html.append(
-                f"<div style='display:flex;align-items:center;gap:16px'>"
-                f"<div style='width:180px;height:120px;display:flex;align-items:center;justify-content:center;border:1px solid #ddd;border-radius:8px;background:#f6f6f6'>ERROR</div>"
-                f"<a href='{u}' target='_blank' style='font-size:12px;word-break:break-all'>{u}</a>"
-                f"</div>"
-            )
+    # Preserve original order
+    ordered_html = [html_results[u] for u in urls]
+    result_html = "<div style='display:flex;flex-direction:column;gap:14px'>\n" + "\n".join(ordered_html) + "\n</div>"
 
-    html.append("</div>")
-    result_html = "\n".join(html)
     return f"Processed {len(urls)} URLs.", result_html
 
 # -------- Gradio Interface --------
